@@ -1,8 +1,10 @@
-import asyncio
+import os
+import sys
 import json
+import asyncio
+from typing import Optional, Dict, Any
 from collections import deque, defaultdict
 from datetime import datetime, timedelta
-from typing import Optional
 from urllib.parse import urlparse, urljoin, parse_qs, urlencode
 
 import tldextract
@@ -31,8 +33,8 @@ MEDIA_EXTENSIONS_TO_SKIP = [
 # Keywords to skip if found in the URL path
 PROHIBITED_PATH_KEYWORDS = {
     "image", "img", "icon", "video", "audio", "file", 
-    "login", "register", "session", "account", "auth",
-    "logout", "signin", "preferences", "settings",
+    "login", "log-in", "register", "session", "account", "auth",
+    "logout", "log-out", "signin", "sign-in", "preferences", "settings",
     "profile", "id", "token", "form", "submit", "user",
     "password", "security", "secure", "payment", "checkout",
 }
@@ -143,9 +145,9 @@ class CustomCrawlerConfig(CrawlerRunConfig):
     ):
         super().__init__(**kwargs)
         self.max_depth = max_depth
-        self.urls_per_depth = urls_per_depth or ['all'] + ['all'] * max_depth  # Default to 'all' for each level
+        self.urls_per_depth = urls_per_depth or ['all'] + ['all'] * max_depth  # default to 'all' for each level
         self.retry_delay = retry_delay
-
+    
 
 class CustomCrawlerMonitor(CrawlerMonitor):
     """
@@ -192,7 +194,7 @@ class CustomCrawlerMonitor(CrawlerMonitor):
                     seconds=int((datetime.now() - self.start_time).total_seconds())
                 )
             ),
-            f"[green]✓{completed_count}[/green] [red]✗{failed_count}[/red]",
+            f"[green]✓ {completed_count}[/green] [red]✗ {failed_count}[/red]",
             style="bold",
         )
 
@@ -232,7 +234,9 @@ class CustomCrawlerMonitor(CrawlerMonitor):
         return table
 
     def _get_enhanced_status_message(self, stat: CrawlStats) -> str:
-        """Generate enhanced status messages with icons and details"""
+        """
+        Generate enhanced status messages with icons and details
+        """
         if stat.status == CrawlStatus.COMPLETED:
             return "[green]✓ Successfully crawled[/green]"
         elif stat.status == CrawlStatus.FAILED:
@@ -245,9 +249,140 @@ class CustomCrawlerMonitor(CrawlerMonitor):
         return ""
     
 
+def load_config(config_file: str) -> Dict[str, Any]:
+    """
+    Load and validate configuration from JSON file
+
+    Args:
+        config_file (str): The path to the JSON file containing the configuration
+
+    Returns:
+        dict: A dictionary containing the configuration
+    """
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # validate basic structure
+        if not isinstance(config, dict):
+            raise ValueError("Config must be a JSON object")
+        if 'browser_config' not in config or 'crawler_config' not in config:
+            raise ValueError("Config must contain 'browser_config' and 'crawler_config' sections")
+            
+        return config
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Error loading config: {str(e)}")
+
+
+def create_browser_config(config: Dict[str, Any]) -> BrowserConfig:
+    """
+    Create BrowserConfig from dict, accepting any valid parameters
+
+    Args:
+        config (dict): A dictionary containing the browser configuration
+
+    Returns:
+        BrowserConfig: A BrowserConfig object
+    """
+    try:
+        return BrowserConfig(**config)
+    except Exception as e:
+        raise ValueError(f"Invalid browser configuration: {str(e)}")
+
+
+def create_crawler_config(config: Dict[str, Any], max_depth: int, urls_per_depth: list) -> CustomCrawlerConfig:
+    """
+    Create CustomCrawlerConfig from dict, accepting any valid parameters
+
+    Args:
+        config (dict): A dictionary containing the crawler configuration
+        max_depth (int): The maximum depth level
+        urls_per_depth (list): The number of URLs to crawl per depth level
+
+    Returns:
+        CustomCrawlerConfig: A CustomCrawlerConfig object
+    """
+    try:
+        # handle special case for cache_mode if it's a string
+        if 'cache_mode' in config and isinstance(config['cache_mode'], str):
+            config['cache_mode'] = CacheMode[config['cache_mode']]
+        
+        # add runtime params
+        config['max_depth'] = max_depth
+        config['urls_per_depth'] = urls_per_depth
+        
+        return CustomCrawlerConfig(**config)
+    except Exception as e:
+        raise ValueError(f"Invalid crawler configuration: {str(e)}")
+
+
+def save_default_config(filepath: str):
+    """Save a default configuration template
+
+    Args:
+        filepath (str): The path to save the default configuration template
+
+    Returns:
+        None
+    """
+    default_config = {
+        "browser_config": {
+            "user_agent_mode": "random",
+            "headless": True,
+            "verbose": False
+        },
+        "crawler_config": {
+            "mean_delay": 1.0,
+            "page_timeout": 30000,
+            "scan_full_page": True,
+            "scroll_delay": 0.75,
+            "wait_for_images": True,
+            "remove_overlay_elements": True,
+            "delay_before_return_html": 1.5,
+            "retry_delay": 5.0,
+            "cache_mode": "ENABLED",
+            "simulate_user": True
+        }
+    }
+    
+    with open(filepath, 'w') as f:
+        json.dump(default_config, f, indent=4)
+
+
+def print_config(config: Dict[str, Any]):
+    """
+    Print configuration in a pretty format for user confirmation
+
+    Args:
+        config (dict): A dictionary containing the configuration
+
+    Returns:
+        None
+    """
+    print("\nCurrent Configuration:")
+    print("=" * 50)
+    print("\nBrowser Config:")
+    print("-" * 20)
+    for key, value in config['browser_config'].items():
+        print(f"{key:25}: {value}")
+    
+    print("\nCrawler Config:")
+    print("-" * 20)
+    for key, value in config['crawler_config'].items():
+        print(f"{key:25}: {value}")
+
+
 async def load_domains(domains_file: str) -> list[str]:
     """
     Loads a list of domain URLs from an Excel file
+
+    Args:
+        domains_file (str): The path to the Excel file containing the domains to crawl
+
+    Returns:
+        list[str]: A list of domain URLs
     """
     df = pd.read_excel(domains_file)
     return [url.strip() for url in df['Domain'].tolist() if isinstance(url, str)]
@@ -314,58 +449,37 @@ async def save_results(results: dict, filename: str):
 
 async def harvest_links(domain_url: str, browser_config: BrowserConfig, run_config: CustomCrawlerConfig):
     """
-    Crawls a domain recursively, up to the specified depth with specified URLs per depth level
+    Crawls a domain recursively, up to the specified depth with specified URLs per depth level,
+    processing URLs in batches to manage memory
     """
+
+    BATCH_SIZE = 500  # process URLs in batches of 500
+    
     main_domain = get_main_domain(domain_url)
     crawled_pages = 0
     max_depth = run_config.max_depth
     visited = set()
     to_visit = deque([(domain_url, 0)])
-    urls_by_depth = defaultdict(list)  # Store URLs grouped by depth
+    urls_by_depth = defaultdict(list)  # store URLs grouped by depth
+    depth_batch_results = defaultdict(list)  # temporary storage for batch results
     
     async with AsyncWebCrawler(config=browser_config) as crawler:
-        # Use the custom monitor instead of the base monitor
-        monitor = CustomCrawlerMonitor(
-            display_mode=DisplayMode.DETAILED,
-            max_visible_rows=20
-        )
-        
-        dispatcher = MemoryAdaptiveDispatcher(
-            memory_threshold_percent=70.0, # memory threshold percentage
-            max_session_permit=10, # maximum number of concurrent sessions
-            rate_limiter=RateLimiter(
-                base_delay=(1.5, 3.0), # base delay for rate limiting
-                max_delay=30.0, # maximum delay for rate limiting
-                max_retries=3 # maximum number of retries for rate limiting
-            ),
-            monitor=monitor 
-        )
-        
-        print(f"\n\nStarting crawl for {domain_url} with max depth: {max_depth}\n")
-        
         while to_visit:
             current_depth = to_visit[0][1] if to_visit else max_depth + 1
             if current_depth > max_depth:
                 break
             
-            # clear previous monitor if depth changed
-            if monitor.live.is_started:
-                monitor.stop()
-            
             print(f"\n{'='*100}")
             print(f"Processing Depth Level {current_depth}")
             print(f"{'='*100}\n")
             
-            # collect URLs for the current depth level
+            # Collect all URLs for current depth
             current_level_urls = []
-            total_found_urls = 0  # Add counter for total URLs found
             depth = current_depth
             while to_visit and to_visit[0][1] == depth:
                 url, _ = to_visit.popleft()
                 current_level_urls.append(url)
-                total_found_urls += 1  # Increment counter for each URL found
             
-            # Store total before applying limit
             total_at_depth = len(current_level_urls)
             
             # Apply URLs per depth limit
@@ -373,61 +487,74 @@ async def harvest_links(domain_url: str, browser_config: BrowserConfig, run_conf
             if urls_limit != 'all' and isinstance(urls_limit, int):
                 current_level_urls = current_level_urls[:urls_limit]
             
-            print(f"Found {total_at_depth} URLs at depth {depth} (limit: {urls_limit}) | Total Processed: {crawled_pages} | Queue Size: {len(to_visit)}\n")
+            print(f"Found {total_at_depth} URLs at depth {depth} (limit: {urls_limit})")
             
-            # start fresh monitor for this depth
-            monitor = CustomCrawlerMonitor(
-                display_mode=DisplayMode.DETAILED,
-                max_visible_rows=20
-            )
-            dispatcher.monitor = monitor
-            
-            # Crawl the current level
-            try:
-                results = await crawler.arun_many(
-                    urls=current_level_urls,
-                    config=run_config,
-                    dispatcher=dispatcher
+            # Process URLs in batches
+            for batch_start in range(0, len(current_level_urls), BATCH_SIZE):
+                batch_urls = current_level_urls[batch_start:batch_start + BATCH_SIZE]
+                batch_num = (batch_start // BATCH_SIZE) + 1
+                total_batches = (len(current_level_urls) + BATCH_SIZE - 1) // BATCH_SIZE
+                
+                print(f"\nProcessing batch {batch_num}/{total_batches} at depth {depth}")
+                print(f"Batch size: {len(batch_urls)} URLs")
+                
+                # create fresh monitor for each batch
+                monitor = CustomCrawlerMonitor(
+                    display_mode=DisplayMode.DETAILED,
+                    max_visible_rows=15
                 )
-            except Exception as e:
-                print(f"\nError crawling URLs at depth {depth}: {str(e)}")
-                continue
-            
-            # Process results and continue with existing logic
-            failed_urls = []
-            for url, result in zip(current_level_urls, results):
-                if not result.success:
-                    failed_urls.append(url)
-                    print(f"\nFailed to crawl {url}: {result.error_message}")
-                else:
-                    # update counters
-                    crawled_pages += 1
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    visited.add((url, depth, timestamp))
-                    urls_by_depth[depth].append((url, timestamp))
-            
-            # Retry failed URLs (optional, handled by Crawl4AI's auto_try)
-            if failed_urls:
-                await asyncio.sleep(run_config.retry_delay)
-            
-            # Extract internal links from successful results
-            next_level_urls = []
-            for result in results:
-                if result.success:
-                    internal_links = result.links.get("internal", [])
-                    base_url = result.url
-                    for link in internal_links:
-                        href = link.get("href", "")
-                        normalized = normalize_url(href, base_url)
-                        if normalized and normalized not in visited:
-                            visited.add(normalized)
-                            # add to next level with depth +1
-                            next_level_urls.append( (normalized, depth + 1) )
-            
-            # Add next level URLs to the queue
-            to_visit.extend(next_level_urls)
+                dispatcher = MemoryAdaptiveDispatcher(
+                    memory_threshold_percent=75.0, # memory threshold percentage
+                    max_session_permit=10, # maximum number of concurrent sessions
+                    rate_limiter=RateLimiter(
+                        base_delay=(1.5, 3.0), # base delay for rate limiting
+                        max_delay=30.0, # maximum delay for rate limiting
+                        max_retries=3 # maximum number of retries for rate limiting
+                    ),
+                    monitor=monitor
+                )
+                
+                # Crawl the current batch
+                try:
+                    results = await crawler.arun_many(
+                        urls=batch_urls,
+                        config=run_config,
+                        dispatcher=dispatcher
+                    )
+                except Exception as e:
+                    print(f"\nError crawling batch at depth {depth}: {str(e)}")
+                    continue
+                
+                # Process batch results
+                next_level_urls = []
+                for url, result in zip(batch_urls, results):
+                    if result.success:
+                        crawled_pages += 1
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        visited.add((url, depth, timestamp))
+                        depth_batch_results[depth].append((url, timestamp))
+                        
+                        # extract internal links
+                        internal_links = result.links.get("internal", [])
+                        for link in internal_links:
+                            href = link.get("href", "")
+                            normalized = normalize_url(href, result.url)
+                            if normalized and normalized not in visited:
+                                visited.add(normalized)
+                                next_level_urls.append((normalized, depth + 1))
+                
+                # add next level URLs to the queue
+                to_visit.extend(next_level_urls)
+                
+                # clear some memory after each batch
+                del results
+                
+            # after all batches for current depth are processed, merge results
+            urls_by_depth[depth].extend(depth_batch_results[depth])
+            # clear batch results for current depth
+            depth_batch_results[depth].clear()
         
-        # Save results after processing
+        # Save final results
         await save_results(
             {
                 "domain": main_domain,
@@ -437,15 +564,22 @@ async def harvest_links(domain_url: str, browser_config: BrowserConfig, run_conf
             f"{main_domain}_complete_links.xlsx"
         )
         
-        # Final progress log
         print(f"\nCrawl completed for {domain_url}. Total crawled pages: {crawled_pages} | Total unique links: {len(visited)}\n")
 
 
-async def main(domains_file_path: str, browser_config: BrowserConfig, run_config: CustomCrawlerConfig):
+async def main(domains_file: str, browser_config: BrowserConfig, run_config: CustomCrawlerConfig):
     """
-    Main function to orchestrate crawling of multiple domains
+    Main function to orchestrate crawling of multiple domains from an Excel file
+
+    Args:
+        domains_file (str): The path to the Excel file containing the domains to crawl
+        browser_config (BrowserConfig): The browser configuration for the crawler
+        run_config (CustomCrawlerConfig): The run configuration for the crawler
+
+    Returns:
+        None
     """
-    domains = await load_domains(domains_file_path)
+    domains = await load_domains(domains_file)
     total_domains = len(domains)
     print(f"\nTotal domains to process: {total_domains}\n{'-' * 100}")
 
@@ -459,53 +593,99 @@ async def main(domains_file_path: str, browser_config: BrowserConfig, run_config
 
 
 if __name__ == "__main__":
-    # Get user input for depth and URLs per depth
-    max_depth = int(input("Enter the maximum depth level: "))
-    urls_per_depth = ['all']  # Depth 0 is always 'all'
-    
-    print("\nFor each depth level (starting from depth 1), enter the number of URLs to crawl")
-    print("Enter 'all' or press Enter to crawl all URLs at that depth level")
-    print("Or enter a number to limit URLs at that depth level")
-    
-    for depth in range(1, max_depth + 1):
+    try:
+        print("\nURLs Harvester v2.0")
+        print("=" * 50)
+        
+        # Get Excel file path from user
         while True:
-            urls_input = input(f"Enter URLs limit for depth {depth} (default: all): ").lower()
-            if not urls_input:  # If user just pressed Enter
-                urls_per_depth.append('all')
+            domains_file = input("\nEnter the path to your domains Excel file: ").strip('"').strip("'")
+            if os.path.exists(domains_file) and domains_file.lower().endswith('.xlsx'):
                 break
-            if urls_input == 'all':
-                urls_per_depth.append('all')
+            print("Error: Invalid file path or not an Excel file. Please try again.")
+
+        # Get config file path from user
+        while True:
+            config_choice = input("\nDo you want to:\n1. Use a config file\n2. Generate a default config template\nEnter choice (1/2): ")
+            
+            if config_choice == "1":
+                config_file = input("\nEnter the path to your config JSON file: ").strip('"').strip("'")
+                if os.path.exists(config_file) and config_file.lower().endswith('.json'):
+                    try:
+                        config = load_config(config_file)
+                        browser_conf = create_browser_config(config['browser_config'])
+                        break
+                    except ValueError as e:
+                        print(f"Error in config file: {str(e)}")
+                        continue
+                print("Error: Invalid file path or not a JSON file. Please try again.")
+            
+            elif config_choice == "2":
+                template_path = input("\nEnter path to save config template: ").strip('"').strip("'")
+                if not template_path.lower().endswith('.json'):
+                    template_path += '.json'
+                save_default_config(template_path)
+                print(f"\nDefault config template saved to: {template_path}")
+
+                # Load and show the default config
+                config = load_config(template_path)
+                print_config(config)
+
+                confirm = input("\nDo you want to continue with this configuration? (y/n): ").lower()
+                if confirm != 'y':
+                    print(f"\nTemplate file is at: {template_path}")
+                    print("Please modify the template and run the program again.")
+                    input("\nPress Enter to exit...")
+                    sys.exit(0)
+
+                browser_conf = create_browser_config(config['browser_config'])
                 break
+            
+            else:
+                print("Invalid choice. Please enter 1 or 2.")
+
+        # Get max_depth from user
+        while True:
             try:
-                urls_limit = int(urls_input)
-                if urls_limit > 0:
-                    urls_per_depth.append(urls_limit)
+                max_depth = int(input("\nEnter the maximum depth level: "))
+                if max_depth > 0:
                     break
-                print("Please enter a positive number, 'all', or press Enter")
+                print("Please enter a positive number")
             except ValueError:
-                print("Please enter a valid number, 'all', or press Enter")
+                print("Please enter a valid number")
 
-    # configuration
-    domains_file = "./Input Data/domains.xlsx"
-    browser_conf = BrowserConfig(
-        user_agent_mode="random",
-        headless=True,
-        verbose=False
-    )
-    run_conf = CustomCrawlerConfig(
-        max_depth=max_depth,
-        urls_per_depth=urls_per_depth,
-        mean_delay=1.0, 
-        page_timeout=30000,
-        scan_full_page=True,
-        scroll_delay=0.75,
-        wait_for_images=True,
-        remove_overlay_elements=True,
-        delay_before_return_html=1.5,
-        retry_delay=5.0,
-        cache_mode=CacheMode.ENABLED,
-        simulate_user=True,
-    )
+        # Get urls_per_depth from user
+        urls_per_depth = ['all']  # depth 0 is always 'all'
+        
+        print("\n🔍 For each depth level (starting from depth 1; depth level 0 is always set to 'all'), specify the number of URLs to crawl:")
+        print("✅ Enter 'all' or press Enter to crawl all URLs at that depth level.")
+        print("🔢 Or enter a specific number to limit the URLs crawled at that depth.")
+        
+        for depth in range(1, max_depth + 1):
+            while True:
+                urls_input = input(f"Enter URLs limit for depth {depth} (default: all): ").lower()
+                if not urls_input:  # if user just pressed Enter
+                    urls_per_depth.append('all')
+                    break
+                if urls_input == 'all':
+                    urls_per_depth.append('all')
+                    break
+                try:
+                    urls_limit = int(urls_input)
+                    if urls_limit > 0:
+                        urls_per_depth.append(urls_limit)
+                        break
+                    print("Please enter a positive number, 'all', or press Enter")
+                except ValueError:
+                    print("Please enter a valid number, 'all', or press Enter")
 
-    asyncio.run(main(domains_file, browser_conf, run_conf))
+        # create crawler config with runtime parameters
+        run_conf = create_crawler_config(config['crawler_config'], max_depth, urls_per_depth)
 
+        # run the crawler
+        asyncio.run(main(domains_file, browser_conf, run_conf))
+        
+    except Exception as e:
+        print(f"\nAn error occurred: {str(e)}")
+    finally:
+        input("\nPress Enter to exit...")
