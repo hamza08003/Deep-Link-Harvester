@@ -1,0 +1,18 @@
+# ignore everything excluding the files listed below
+*
+
+# don't ignore these specific files
+!.gitignore
+!urls_harvester_v0.py
+!urls_harvester_v1.py
+!urls_harvester_v2.py
+!images_downloader.py
+!user-agents.txt
+!domains.xlsx
+!config.json
+!README.md
+
+# ignore Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
