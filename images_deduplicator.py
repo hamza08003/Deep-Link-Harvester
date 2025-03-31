@@ -1,7 +1,23 @@
 import os
+import logging
 import imagehash
 from PIL import Image
+from rich.table import Table
+from rich.theme import Theme
+from rich.console import Console
 from typing import Tuple, List, Dict, Optional
+
+
+# configure logging for debugging details
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s: %(message)s")
+
+# create a console with a custom theme if desired.
+custom_theme = Theme({
+    "retained": "bold green",
+    "deleted": "bold red",
+    "error": "bold yellow"
+})
+console = Console(theme=custom_theme)
 
 
 # it is a dictionary that stores hash values as keys and lists of image file paths as values.
@@ -73,6 +89,7 @@ def process_images(image_dir: str, similarity_threshold: int = 5) -> None:
     1. Compute hashes for all images and group similar ones.
     2. Within each group, retain only the largest image (highest resolution).
     3. Delete smaller/duplicate images.
+    4. Display a detailed summary table for each group including image size and dimensions using Rich.
 
     Args:
         image_dir (str): Path to the directory containing images.
@@ -82,13 +99,16 @@ def process_images(image_dir: str, similarity_threshold: int = 5) -> None:
         None: This function directly modifies the filesystem (deletes duplicate images).
     """
     
-    print("\n🔍 Step 1: Hashing Images & Grouping Similar Ones...\n")
+    logging.info("Starting Image(s) Processing...")
     
     # get list of all image files in the directory
     image_paths = []
     for f in os.listdir(image_dir):
         if f.lower().endswith(('.png', '.jpg', '.jpeg')):
             image_paths.append(os.path.join(image_dir, f))
+    
+    # Step 1: Hash images and group similar ones.
+    logging.info("Hashing images and grouping similar ones...")
     
     # loop through each image in the 'images_paths' list and compute its hash
     for image_path in image_paths:
@@ -103,46 +123,83 @@ def process_images(image_dir: str, similarity_threshold: int = 5) -> None:
                 a_dist = hamming_distance(ahash, stored_hash[1])
                 
                 # check if the image is similar to an existing one
-                if p_dist <= similarity_threshold or a_dist <= similarity_threshold:
+                if p_dist <= similarity_threshold and a_dist <= similarity_threshold:
                     found_match = stored_hash
                     break
             
             if found_match:
                 # add the image to the existing group if found_match in hash_map
                 hash_map[found_match].append(image_path)
+                logging.debug(f"Grouped {image_path} with group {found_match}")
             else:
                 # if no match found, create a new group with the current image
                 hash_map[(phash, ahash)] = [image_path]
+                logging.debug(f"Created new group for {image_path}")
                 
         except Exception as e:
-            print(f"❌ Error hashing {image_path}: {e}")
+            logging.error(f"Error processing {image_path}: {e}")
 
-    # Step 2: Print hash groups
-    print("\n📂 Image Groups Formed:")
-    for img_hash, paths in hash_map.items():
-        print(f"\n📌 Group: {img_hash}")
-        for img in paths:
-            size_kb, width, height = get_image_size(img)
-            print(f"  ➡ {img} | {size_kb:.2f} KB | {width}x{height}")
+    # Structure to hold detailed results per group.
+    # Each group will have a list of tuples: (image_path, action, size, dimensions)
+    detailed_summary: List[List[Tuple[str, str, float, str]]] = []
 
-    print("\n🛠 Step 2: Keeping Best Images & Removing Duplicates...\n")
+    # Step 2: Select the best image (largest file size) in each group and remove the rest.
+    logging.info("Selecting best images and removing duplicates...")
 
-    # Step 3: Keep only the highest resolution image in each duplicate group
-    for img_hash, paths in hash_map.items():
-        if len(paths) > 1:
-            # select the largest file (highest resolution assumption)
-            largest_image = max(paths, key=lambda img: get_image_size(img)[0])  
-            print(f"\n✅ Keeping: {largest_image}")
+    # loop through each group in the hash_map to determine the best image to retain
+    for group_hash, paths in hash_map.items():
+        group_summary = []
+        # if only one image in the group, retain it and record its details.
+        if len(paths) == 1:
+            size, width, height = get_image_size(paths[0])
+            dimensions = f"{width}x{height}"
+            group_summary.append((paths[0], "Retained", size, dimensions))
+        # if multiple images in the group, determine the best one by file size.
+        else:
+            best_image = max(paths, key=lambda img: get_image_size(img)[0])
+            size_best, width_best, height_best = get_image_size(best_image)
+            dimensions_best = f"{width_best}x{height_best}"
+            group_summary.append((best_image, "Retained", size_best, dimensions_best))
 
-            # delete smaller images
+            # delete duplicates after recording each duplicate's info.
             for img in paths:
-                if img != largest_image:
-                    os.remove(img)
-                    print(f"❌ Deleted: {img}")
+                if img != best_image:
+                    # get duplicate image details before deletion.
+                    size_dup, width_dup, height_dup = get_image_size(img)
+                    dimensions_dup = f"{width_dup}x{height_dup}"
+                    try:
+                        os.remove(img)
+                        group_summary.append((img, "Deleted", size_dup, dimensions_dup))
+                        logging.debug(f"Deleted duplicate {img}")
+                    except Exception as e:
+                        logging.error(f"Error deleting {img}: {e}")
+                        group_summary.append((img, "Error", size_dup, dimensions_dup))
+        detailed_summary.append(group_summary)
 
-    print("\n🎉 Cleanup Complete! Only high-resolution images remain.")
+
+    # Step 3: Print the detailed summary table for each group using Rich.
+    console.rule("[bold blue]Detailed Summary Table[/bold blue]")
+    for idx, group in enumerate(detailed_summary, start=1):
+        table = Table(title=f"Group {idx}", header_style="bold magenta")
+        table.add_column("No.", style="dim", width=5)
+        table.add_column("Image", width=40)
+        table.add_column("Action", width=10, justify="center")
+        table.add_column("Size (KB)", justify="right", width=10)
+        table.add_column("Dimensions", justify="center", width=15)
+        
+        for i, (img, action, size, dimensions) in enumerate(group, start=1):
+            if action == "Retained":
+                action_text = "[retained]✓ Retained[/retained]"
+            elif action == "Deleted":
+                action_text = "[deleted]✗ Deleted[/deleted]"
+            else:
+                action_text = "[error]! Error[/error]"
+            table.add_row(str(i), os.path.basename(img), action_text, f"{size:.2f}", dimensions)
+        console.print(table)
+    console.rule("[bold blue]Processing complete![/bold blue]")
+    console.print("Retained images are marked with [green]✓[/green] and deleted ones with [red]✗[/red].")
 
 
-# example usage
-image_dir = "Downloaded_Images//Depth Level 0"
-process_images(image_dir)
+# Example Usage
+images_dir = "Downloaded_Images//Depth Level 0"
+process_images(images_dir)
