@@ -311,18 +311,45 @@ def create_crawler_config(config: Dict[str, Any], max_depth: int, urls_per_depth
         raise ValueError(f"Invalid crawler configuration: {str(e)}")
 
 
-async def load_domains(domains_file: str) -> list[str]:
+def load_and_select_domains(domains_file: str) -> list[str]:
     """
-    Loads a list of domain URLs from an Excel file
+    Loads domains from an Excel file, displays them with indices, and returns the selected domains
 
     Args:
-        domains_file (str): The path to the Excel file containing the domains to crawl
+        domains_file (str): Path to the Excel file containing domains
 
     Returns:
-        `list[str]`: A list of domain URLs
+        list[str]: List of selected domains
     """
     df = pd.read_excel(domains_file)
-    return [url.strip() for url in df['Domain'].tolist() if isinstance(url, str)]
+    all_domains = [url.strip() for url in df['Domain'].tolist() if isinstance(url, str)]
+    
+    print("\nAvailable domains in the Excel file:")
+    for idx, domain in enumerate(all_domains, 1):
+        print(f"{idx}. {domain}")
+    
+    # ask user which domains to process
+    while True:
+        selection = input("\nEnter domain numbers to process (comma-separated) or 'all' for all domains: ").strip().lower()
+        
+        if selection == 'all':
+            return all_domains
+        
+        try:
+            # Parse comma-separated indices and validate them
+            indices = [int(idx.strip()) for idx in selection.split(',')]
+            invalid_indices = [idx for idx in indices if idx < 1 or idx > len(all_domains)]
+            
+            if invalid_indices:
+                print(f"Invalid indices: {', '.join(map(str, invalid_indices))}. Please try again.")
+                continue
+            
+            # convert to 0-based indices for list access
+            selected_domains = [all_domains[i-1] for i in indices]
+            return selected_domains
+            
+        except ValueError:
+            print("Please enter valid numbers separated by commas or 'all'.")
 
 
 async def save_results(results: dict, filename: str) -> None:
@@ -673,19 +700,19 @@ async def harvest_links(domain_url: str, browser_config: BrowserConfig, run_conf
         print(f"\nCrawl completed for {domain_url}. Total crawled pages: {crawled_pages} | Total unique links: {len(visited)} | Total images: {len(all_images)}\n")
 
 
-async def main(domains_file: str, browser_config: BrowserConfig, run_config: CustomCrawlerConfig, depth_wise_url_batch_size: int) -> None:
+async def main(domains: list[str], browser_config: BrowserConfig, run_config: CustomCrawlerConfig, depth_wise_url_batch_size: int) -> None:
     """
-    Main function to orchestrate crawling of multiple domains from an Excel file
+    Main function to orchestrate crawling of selected domains
 
     Args:
-        domains_filepath (str): The path to the Excel file containing the domains to crawl
+        domains (list[str]): List of domains to crawl
         browser_config (BrowserConfig): The browser configuration for the crawler
         run_config (CustomCrawlerConfig): The run configuration for the crawler
+        depth_wise_url_batch_size (int): The number of URLs to process in each batch per depth
 
     Returns:
         None
     """
-    domains = await load_domains(domains_file)
     total_domains = len(domains)
     print(f"\nTotal domains to process: {total_domains}\n{'-' * 100}")
 
@@ -707,6 +734,7 @@ if __name__ == "__main__":
         while True:
             domains_file = input("\nEnter the path to your domains Excel file: ").strip('"').strip("'")
             if os.path.exists(domains_file) and domains_file.lower().endswith('.xlsx'):
+                selected_domains = load_and_select_domains(domains_file)
                 break
             print("Error: Invalid file path or not an Excel file. Please try again.")
 
@@ -768,7 +796,7 @@ if __name__ == "__main__":
             batch_size = 500
 
         # run the crawler
-        asyncio.run(main(domains_file, browser_conf, run_conf, depth_wise_url_batch_size))
+        asyncio.run(main(selected_domains, browser_conf, run_conf, depth_wise_url_batch_size))
         
     except Exception as e:
         print(f"\nAn error occurred: {str(e)}")
