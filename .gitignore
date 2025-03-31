@@ -7,7 +7,7 @@
 !urls_harvester_v1.py
 !urls_harvester_v2.py
 !images_downloader.py
-!hash_based_image_deduplicator.py
+!image_deduplicator.py
 !user-agents.txt
 !domains.xlsx
 !config.json
