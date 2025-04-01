@@ -8,6 +8,7 @@
 !urls_harvester_v2.py
 !images_downloader.py
 !image_deduplicator.py
+!face_detectior_and_vector_embeddings_extractor.py
 !user-agents.txt
 !domains.xlsx
 !config.json
